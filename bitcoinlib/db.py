@@ -25,7 +25,7 @@ except:
     import enum34 as enum
 import datetime
 from sqlalchemy import create_engine, func
-from sqlalchemy import Column, Integer, UniqueConstraint, CheckConstraint, String, Boolean, Sequence, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, UniqueConstraint, CheckConstraint, String, Boolean, Sequence, ForeignKey, DateTime, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 
@@ -43,8 +43,11 @@ class DbInit:
     Import data if database did not exist yet
 
     """
-    def __init__(self, databasefile=DEFAULT_DATABASE):
-        self.engine = create_engine('sqlite:///%s' % databasefile)
+    def __init__(self, databasefile=DEFAULT_DATABASE, engine = None):
+        if not engine:
+            self.engine = create_engine('sqlite:///%s' % databasefile)
+        else:
+            self.engine = engine
         Session = sessionmaker(bind=self.engine)
 
         if not os.path.exists(databasefile):
@@ -133,7 +136,7 @@ class DbKey(Base):
     account_id = Column(Integer, index=True)
     depth = Column(Integer)
     change = Column(Integer)
-    address_index = Column(Integer)
+    address_index = Column(BigInteger)
     public = Column(String(255), index=True)
     private = Column(String(255), index=True)
     wif = Column(String(255), index=True)

@@ -49,7 +49,7 @@ class WalletError(Exception):
         return self.msg
 
 
-def wallets_list(databasefile=DEFAULT_DATABASE):
+def wallets_list(databasefile=DEFAULT_DATABASE,session = None):
     """
     List Wallets from database
     
@@ -58,8 +58,9 @@ def wallets_list(databasefile=DEFAULT_DATABASE):
     
     :return dict: Dictionary of wallets defined in database
     """
+    if not session:
+        session = DbInit(databasefile=databasefile).session
 
-    session = DbInit(databasefile=databasefile).session
     wallets = session.query(DbWallet).all()
     wlst = []
     for w in wallets:
@@ -77,7 +78,7 @@ def wallets_list(databasefile=DEFAULT_DATABASE):
     return wlst
 
 
-def wallet_exists(wallet, databasefile=DEFAULT_DATABASE):
+def wallet_exists(wallet, databasefile=DEFAULT_DATABASE, session = None):
     """
     Check if Wallets is defined in database
     
@@ -88,8 +89,11 @@ def wallet_exists(wallet, databasefile=DEFAULT_DATABASE):
     
     :return bool: True if wallet exists otherwise False
     """
-
-    if wallet in [x['name'] for x in wallets_list(databasefile)]:
+    if not session:
+        wallet_list =  wallets_list(databasefile=databasefile)
+    else:
+        wallet_list = wallets_list(session=session)
+    if wallet in [x['name'] for x in wallet_list]:
         return True
     if isinstance(wallet, int) and wallet in [x['id'] for x in wallets_list(databasefile)]:
         return True
@@ -97,18 +101,19 @@ def wallet_exists(wallet, databasefile=DEFAULT_DATABASE):
 
 
 def wallet_create_or_open(name, key='', owner='', network=None, account_id=0, purpose=44, scheme='bip44',
-                          parent_id=None, sort_keys=False, password='', databasefile=DEFAULT_DATABASE):
+                          parent_id=None, sort_keys=False, password='', databasefile=DEFAULT_DATABASE, session= None):
     """
     Create a wallet with specified options if it doesn't exist, otherwise just open
 
     See Wallets class create method for option documentation
 
     """
-    if wallet_exists(name, databasefile=databasefile):
-        return HDWallet(name, databasefile=databasefile)
+
+    if wallet_exists(name, databasefile=databasefile, session=session):
+        return HDWallet(name, databasefile=databasefile, session=session)
     else:
         return HDWallet.create(name, key, owner, network, account_id, purpose, scheme, parent_id, sort_keys,
-                               password, databasefile)
+                               password, databasefile,session=session)
 
 
 def wallet_create_or_open_multisig(
@@ -127,7 +132,7 @@ def wallet_create_or_open_multisig(
                                         multisig_compressed, sort_keys, databasefile)
 
 
-def wallet_delete(wallet, databasefile=DEFAULT_DATABASE, force=False):
+def wallet_delete(wallet, databasefile=DEFAULT_DATABASE, session = None, force=False):
     """
     Delete wallet and associated keys and transactions from the database. If wallet has unspent outputs it raises a
     WalletError exception unless 'force=True' is specified
@@ -141,8 +146,8 @@ def wallet_delete(wallet, databasefile=DEFAULT_DATABASE, force=False):
     
     :return int: Number of rows deleted, so 1 if succesfull
     """
-
-    session = DbInit(databasefile=databasefile).session
+    if not session:
+        session = DbInit(databasefile=databasefile).session
     if isinstance(wallet, int) or wallet.isdigit():
         w = session.query(DbWallet).filter_by(id=wallet)
     else:
@@ -209,7 +214,7 @@ def wallet_empty(wallet, databasefile=DEFAULT_DATABASE):
     return True
 
 
-def wallet_delete_if_exists(wallet, databasefile=DEFAULT_DATABASE, force=False):
+def wallet_delete_if_exists(wallet, databasefile=DEFAULT_DATABASE,session =None, force=False):
     """
     Delete wallet and associated keys from the database. If wallet has unspent outputs it raises a WalletError exception
     unless 'force=True' is specified. If wallet wallet does not exist return False
@@ -224,8 +229,8 @@ def wallet_delete_if_exists(wallet, databasefile=DEFAULT_DATABASE, force=False):
     :return int: Number of rows deleted, so 1 if succesfull
     """
 
-    if wallet_exists(wallet, databasefile):
-        return wallet_delete(wallet, databasefile, force)
+    if wallet_exists(wallet, databasefile, session):
+        return wallet_delete(wallet, databasefile, session,force)
     return False
 
 
@@ -748,7 +753,7 @@ class HDWallet:
 
     @classmethod
     def create(cls, name, key='', owner='', network=None, account_id=0, purpose=44, scheme='bip44', parent_id=None,
-               sort_keys=True, password='', databasefile=None):
+               sort_keys=True, password='', databasefile=None, session = None):
         """
         Create HDWallet and insert in database. Generate masterkey or import key when specified. 
         
@@ -780,9 +785,9 @@ class HDWallet:
         :return HDWallet: 
         """
 
-        if databasefile is None:
+        if session is None:
             databasefile = DEFAULT_DATABASE
-        session = DbInit(databasefile=databasefile).session
+            session = DbInit(databasefile=databasefile).session
         if session.query(DbWallet).filter_by(name=name).count():
             raise WalletError("Wallet with name '%s' already exists" % name)
         else:
@@ -819,7 +824,7 @@ class HDWallet:
             new_wallet.main_key_id = mk.key_id
             session.commit()
 
-            w = cls(new_wallet_id, databasefile=databasefile, main_key_object=mk.key())
+            w = cls(new_wallet_id, databasefile=databasefile, session= session,main_key_object=mk.key())
             if mk.depth == 0:
                 nw = Network(network)
                 networkcode = nw.bip44_cointype
@@ -994,7 +999,7 @@ class HDWallet:
     def __enter__(self):
         return self
 
-    def __init__(self, wallet, databasefile=DEFAULT_DATABASE, session=None, main_key_object=None):
+    def __init__(self, wallet=None, databasefile=DEFAULT_DATABASE, session=None, main_key_object=None):
         """
         Open a wallet with given ID or name
         
@@ -1014,42 +1019,43 @@ class HDWallet:
             dbinit = DbInit(databasefile=databasefile)
             self._session = dbinit.session
             self._engine = dbinit.engine
-        self.databasefile = databasefile
-        if isinstance(wallet, int) or wallet.isdigit():
-            db_wlt = self._session.query(DbWallet).filter_by(id=wallet).scalar()
-        else:
-            db_wlt = self._session.query(DbWallet).filter_by(name=wallet).scalar()
-        if db_wlt:
-            self._dbwallet = db_wlt
-            self.wallet_id = db_wlt.id
-            self._name = db_wlt.name
-            self._owner = db_wlt.owner
-            self.network = Network(db_wlt.network_name)
-            self.purpose = db_wlt.purpose
-            self.scheme = db_wlt.scheme
-            self._balance = None
-            self._balances = []
-            self.main_key_id = db_wlt.main_key_id
-            self.main_key = None
-            self.default_account_id = 0
-            self.multisig_n_required = db_wlt.multisig_n_required
-            self.multisig_compressed = None
-            co_sign_wallets = self._session.query(DbWallet).\
-                filter(DbWallet.parent_id == self.wallet_id).order_by(DbWallet.name).all()
-            self.cosigner = [HDWallet(w.id, databasefile=databasefile) for w in co_sign_wallets]
-            self.sort_keys = db_wlt.sort_keys
-            if main_key_object:
-                self.main_key = HDWalletKey(self.main_key_id, session=self._session, hdkey_object=main_key_object)
-            elif db_wlt.main_key_id:
-                self.main_key = HDWalletKey(self.main_key_id, session=self._session)
-            if self.main_key:
-                self.default_account_id = self.main_key.account_id
-            _logger.info("Opening wallet '%s'" % self.name)
-            self._key_objects = {
-                self.main_key_id: self.main_key
-            }
-        else:
-            raise WalletError("Wallet '%s' not found, please specify correct wallet ID or name." % wallet)
+            self.databasefile = databasefile
+        if wallet:
+            if isinstance(wallet, int) or wallet.isdigit():
+                db_wlt = self._session.query(DbWallet).filter_by(id=wallet).scalar()
+            else:
+                db_wlt = self._session.query(DbWallet).filter_by(name=wallet).scalar()
+            if db_wlt:
+                self._dbwallet = db_wlt
+                self.wallet_id = db_wlt.id
+                self._name = db_wlt.name
+                self._owner = db_wlt.owner
+                self.network = Network(db_wlt.network_name)
+                self.purpose = db_wlt.purpose
+                self.scheme = db_wlt.scheme
+                self._balance = None
+                self._balances = []
+                self.main_key_id = db_wlt.main_key_id
+                self.main_key = None
+                self.default_account_id = 0
+                self.multisig_n_required = db_wlt.multisig_n_required
+                self.multisig_compressed = None
+                co_sign_wallets = self._session.query(DbWallet).\
+                    filter(DbWallet.parent_id == self.wallet_id).order_by(DbWallet.name).all()
+                self.cosigner = [HDWallet(w.id, databasefile=databasefile) for w in co_sign_wallets]
+                self.sort_keys = db_wlt.sort_keys
+                if main_key_object:
+                    self.main_key = HDWalletKey(self.main_key_id, session=self._session, hdkey_object=main_key_object)
+                elif db_wlt.main_key_id:
+                    self.main_key = HDWalletKey(self.main_key_id, session=self._session)
+                if self.main_key:
+                    self.default_account_id = self.main_key.account_id
+                _logger.info("Opening wallet '%s'" % self.name)
+                self._key_objects = {
+                    self.main_key_id: self.main_key
+                }
+            else:
+                raise WalletError("Wallet '%s' not found, please specify correct wallet ID or name." % wallet)
 
     def __exit__(self, exception_type, exception_value, traceback):
         self._session.close()
@@ -1064,7 +1070,7 @@ class HDWallet:
 
     def __repr__(self):
         return "<HDWallet(name=%s, databasefile=\"%s\")>" % \
-               (self.name, self.databasefile)
+               (self.name,  self.databasefile if hasattr(self,"databasefile") else None)
 
     def _get_account_defaults(self, network=None, account_id=None, key_id=None):
         """
@@ -2095,7 +2101,7 @@ class HDWallet:
         :return: Updated balance
         """
 
-        qr = self._session.query(DbTransactionOutput, func.sum(DbTransactionOutput.value), DbKey.network_name,
+        qr = self._session.query(DbTransactionOutput.key_id,DbKey.network_name,DbKey.account_id, func.sum(DbTransactionOutput.value), DbKey.network_name,
                                  DbKey.account_id).\
             join(DbTransaction).join(DbKey). \
             filter(DbTransactionOutput.spent.op("IS")(False),
@@ -2107,7 +2113,7 @@ class HDWallet:
             qr = qr.filter(DbKey.network_name == network)
         if key_id is not None:
             qr = qr.filter(DbKey.id == key_id)
-        utxos = qr.group_by(DbTransactionOutput.key_id).all()
+        utxos = qr.group_by(DbTransactionOutput.key_id,DbKey.network_name,DbKey.account_id).all()
 
         key_values = [
             {
